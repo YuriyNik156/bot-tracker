@@ -1,13 +1,16 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from datetime import datetime
 
 import sqlite3
 from database import init_db, DB_PATH
 
+from logger import setup_logger
+
 
 app = FastAPI(title="Tracker API")
 
+logger = setup_logger("api_server")
 
 def get_connection():
     return sqlite3.connect(DB_PATH)
@@ -16,6 +19,7 @@ def get_connection():
 @app.on_event("startup")
 def startup():
     init_db()
+    logger.info("API server started")
 
 
 # ===== Pydantic-схемы =====
@@ -34,10 +38,31 @@ class TrackerSent(BaseModel):
     telegram_user_id: int
 
 
+# ===== Логирование входящих HTTP-запросов =====
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    logger.info(f"REQUEST | {request.method} {request.url.path}")
+
+    try:
+        response = await call_next(request)
+        logger.info(
+            f"RESPONSE | {request.method} {request.url.path} | status={response.status_code}"
+        )
+        return response
+
+    except Exception as e:
+        logger.error(
+            f"UNHANDLED_EXCEPTION | {request.method} {request.url.path}",
+            exc_info=True
+        )
+        raise
+
 # ===== API эндпоинты =====
 
 @app.post("/users")
 def create_user(data: UserCreate):
+    logger.info(f"CREATE_USER | instagram={data.instagram_username}")
+
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -48,6 +73,7 @@ def create_user(data: UserCreate):
     user = cursor.fetchone()
 
     if user:
+        logger.info(f"USER_EXISTS | instagram={data.instagram_username}")
         conn.close()
         return {"message": "User already exists"}
 
@@ -62,11 +88,16 @@ def create_user(data: UserCreate):
     conn.commit()
     conn.close()
 
+    logger.info(f"USER_CREATED | instagram={data.instagram_username}")
     return {"message": "User created"}
 
 
 @app.post("/subscription")
 def update_subscription(data: SubscriptionUpdate):
+    logger.info(
+        f"SUBSCRIPTION_UPDATE | instagram={data.instagram_username} | subscribed={data.is_subscribed}"
+    )
+
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -80,17 +111,25 @@ def update_subscription(data: SubscriptionUpdate):
     )
 
     if cursor.rowcount == 0:
+        logger.warning(
+            f"USER_NOT_FOUND | instagram={data.instagram_username}"
+        )
         conn.close()
         raise HTTPException(status_code=404, detail="User not found")
 
     conn.commit()
     conn.close()
 
+    logger.info(f"SUBSCRIPTION_OK | instagram={data.instagram_username}")
     return {"message": "Subscription status updated"}
 
 
 @app.post("/tracker-sent")
 def mark_tracker_sent(data: TrackerSent):
+    logger.info(
+        f"TRACKER_SENT | instagram={data.instagram_username} | telegram_id={data.telegram_user_id}"
+    )
+
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -109,10 +148,16 @@ def mark_tracker_sent(data: TrackerSent):
     )
 
     if cursor.rowcount == 0:
+        logger.warning(
+            f"TRACKER_FAIL | instagram={data.instagram_username}"
+        )
         conn.close()
         raise HTTPException(status_code=404, detail="User not found")
 
     conn.commit()
     conn.close()
 
+    logger.info(
+        f"TRACKER_OK | instagram={data.instagram_username} | telegram_id={data.telegram_user_id}"
+    )
     return {"message": "Tracker marked as sent"}
