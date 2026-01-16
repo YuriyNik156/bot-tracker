@@ -13,7 +13,11 @@ app = FastAPI(title="Tracker API")
 logger = setup_logger("api_server")
 
 def get_connection():
-    return sqlite3.connect(DB_PATH)
+    try:
+        return sqlite3.connect(DB_PATH)
+    except sqlite3.Error as e:
+        logger.error(f"DB connection error: {e}")
+        raise HTTPException(status_code=500, detail="Database connection failed")
 
 
 @app.on_event("startup")
@@ -61,103 +65,104 @@ async def log_requests(request: Request, call_next):
 
 @app.post("/users")
 def create_user(data: UserCreate):
-    logger.info(f"CREATE_USER | instagram={data.instagram_username}")
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
 
-    conn = get_connection()
-    cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id FROM users WHERE instagram_username = ?",
+            (data.instagram_username,)
+        )
+        if cursor.fetchone():
+            logger.info(f"User already exists: {data.instagram_username}")
+            return {"message": "User already exists"}
 
-    cursor.execute(
-        "SELECT id FROM users WHERE instagram_username = ?",
-        (data.instagram_username,)
-    )
-    user = cursor.fetchone()
+        cursor.execute(
+            "INSERT INTO users (instagram_username, logs) VALUES (?, ?)",
+            (data.instagram_username, "user_created")
+        )
 
-    if user:
-        logger.info(f"USER_EXISTS | instagram={data.instagram_username}")
+        conn.commit()
+        logger.info(f"User created: {data.instagram_username}")
+        return {"message": "User created"}
+
+    except Exception as e:
+        logger.error(f"Create user error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    finally:
         conn.close()
-        return {"message": "User already exists"}
 
-    cursor.execute(
-        """
-        INSERT INTO users (instagram_username, logs)
-        VALUES (?, ?)
-        """,
-        (data.instagram_username, "user_created")
-    )
-
-    conn.commit()
-    conn.close()
-
-    logger.info(f"USER_CREATED | instagram={data.instagram_username}")
-    return {"message": "User created"}
 
 
 @app.post("/subscription")
 def update_subscription(data: SubscriptionUpdate):
-    logger.info(
-        f"SUBSCRIPTION_UPDATE | instagram={data.instagram_username} | subscribed={data.is_subscribed}"
-    )
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
 
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        UPDATE users
-        SET is_subscribed = ?, logs = ?
-        WHERE instagram_username = ?
-        """,
-        (int(data.is_subscribed), "subscription_updated", data.instagram_username)
-    )
-
-    if cursor.rowcount == 0:
-        logger.warning(
-            f"USER_NOT_FOUND | instagram={data.instagram_username}"
+        cursor.execute(
+            """
+            UPDATE users
+            SET is_subscribed = ?, logs = ?
+            WHERE instagram_username = ?
+            """,
+            (int(data.is_subscribed), "subscription_updated", data.instagram_username)
         )
+
+        if cursor.rowcount == 0:
+            logger.info(f"Subscription update failed: {data.instagram_username}")
+            raise HTTPException(status_code=404, detail="User not found")
+
+        conn.commit()
+        logger.info(f"Subscription updated: {data.instagram_username}")
+        return {"message": "Subscription updated"}
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.error(f"Subscription error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    finally:
         conn.close()
-        raise HTTPException(status_code=404, detail="User not found")
-
-    conn.commit()
-    conn.close()
-
-    logger.info(f"SUBSCRIPTION_OK | instagram={data.instagram_username}")
-    return {"message": "Subscription status updated"}
 
 
 @app.post("/tracker-sent")
 def mark_tracker_sent(data: TrackerSent):
-    logger.info(
-        f"TRACKER_SENT | instagram={data.instagram_username} | telegram_id={data.telegram_user_id}"
-    )
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
 
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        UPDATE users
-        SET telegram_user_id = ?, tracker_sent_at = ?, logs = ?
-        WHERE instagram_username = ?
-        """,
-        (
-            data.telegram_user_id,
-            datetime.utcnow().isoformat(),
-            "tracker_sent",
-            data.instagram_username
+        cursor.execute(
+            """
+            UPDATE users
+            SET telegram_user_id = ?, tracker_sent_at = ?, logs = ?
+            WHERE instagram_username = ?
+            """,
+            (
+                data.telegram_user_id,
+                datetime.utcnow().isoformat(),
+                "tracker_sent",
+                data.instagram_username
+            )
         )
-    )
 
-    if cursor.rowcount == 0:
-        logger.warning(
-            f"TRACKER_FAIL | instagram={data.instagram_username}"
-        )
+        if cursor.rowcount == 0:
+            logger.info(f"Tracker send failed: {data.instagram_username}")
+            raise HTTPException(status_code=404, detail="User not found")
+
+        conn.commit()
+        logger.info(f"Tracker sent: {data.instagram_username}")
+        return {"message": "Tracker marked as sent"}
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.error(f"Tracker error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    finally:
         conn.close()
-        raise HTTPException(status_code=404, detail="User not found")
-
-    conn.commit()
-    conn.close()
-
-    logger.info(
-        f"TRACKER_OK | instagram={data.instagram_username} | telegram_id={data.telegram_user_id}"
-    )
-    return {"message": "Tracker marked as sent"}

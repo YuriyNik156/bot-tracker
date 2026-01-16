@@ -4,7 +4,7 @@ from aiogram.filters import Command
 import asyncio
 import requests, os
 from dotenv import load_dotenv
-import httpx
+from httpx import AsyncClient, RequestError, TimeoutException
 
 from logger import setup_logger
 
@@ -41,17 +41,13 @@ async def cmd_start(message: Message):
         )
 
 
-@dp.message(F.text & ~F.text.startswith("/"))
+@dp.message(F.text & ~F.text.regexp(r'^\s*$'))
 async def handle_username(message: Message):
     instagram_username = message.text.strip()
     telegram_user_id = message.from_user.id
 
-    logger.info(
-        f"INPUT | telegram_id={telegram_user_id} | instagram={instagram_username}"
-    )
-
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
+        async with AsyncClient(timeout=5) as client:
             response = await client.post(
                 f"{API_BASE_URL}/tracker-sent",
                 json={
@@ -62,15 +58,21 @@ async def handle_username(message: Message):
 
         if response.status_code == 200:
             await message.answer("Готово! Трекер отправлен ✅")
+        elif response.status_code == 404:
+            await message.answer("Пользователь не найден 😕")
         else:
-            await message.answer("Не нашёл пользователя 😕")
+            await message.answer("Что-то пошло не так ⚠️")
 
-    except httpx.RequestError:
-        await message.answer("Сервер недоступен ⚠️")
+    except TimeoutException:
+        await message.answer("Сервер долго отвечает ⏳ Попробуй позже")
 
+    except RequestError:
+        await message.answer("Сервер временно недоступен ⚠️")
 
 async def main():
+    logger.info("Telegram bot started")
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
