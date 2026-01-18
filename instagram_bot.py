@@ -1,11 +1,13 @@
 from instagrapi import Client
-import time
-import os
-from dotenv import load_dotenv
-
 from instagrapi.exceptions import ClientConnectionError
 
+import time
+import os
+import requests
+from dotenv import load_dotenv
+
 from logger import setup_logger
+
 
 # --------------------
 # ENV
@@ -15,21 +17,23 @@ load_dotenv()
 IG_USERNAME = os.getenv("INSTAGRAM_USERNAME")
 IG_PASSWORD = os.getenv("INSTAGRAM_PASSWORD")
 TG_BOT_LINK = os.getenv("TELEGRAM_BOT_LINK")
+API_BASE_URL = os.getenv("API_BASE_URL")
 
 POST_URL = "https://www.instagram.com/p/DTnRnyXjDVQ/"
 SESSION_FILE = "ig_session.json"
+
 
 # --------------------
 # LOGGER
 # --------------------
 logger = setup_logger("instagram_bot")
 
+
 # --------------------
 # INSTAGRAM CLIENT
 # --------------------
 cl = Client()
 
-# Device fingerprint (маскируемся под Android)
 cl.set_device({
     "app_version": "269.0.0.18.75",
     "android_version": 26,
@@ -44,7 +48,7 @@ cl.set_device({
 
 
 # --------------------
-# LOGIN WITH SESSION
+# LOGIN
 # --------------------
 def login():
     if os.path.exists(SESSION_FILE):
@@ -53,7 +57,7 @@ def login():
             logger.info("Instagram session loaded")
             return
         except Exception as e:
-            logger.warning(f"Failed to load session, relogin required: {e}")
+            logger.warning(f"Session load failed: {e}")
 
     cl.login(IG_USERNAME, IG_PASSWORD)
     cl.dump_settings(SESSION_FILE)
@@ -61,15 +65,45 @@ def login():
 
 
 # --------------------
-# HELPERS
+# API HELPERS
+# --------------------
+def api_create_user(instagram_username: str):
+    try:
+        requests.post(
+            f"{API_BASE_URL}/users",
+            json={"instagram_username": instagram_username},
+            timeout=5
+        )
+        logger.info(f"API user created or exists | {instagram_username}")
+    except Exception as e:
+        logger.error(f"API create_user error | {instagram_username} | {e}")
+
+
+def api_mark_subscribed(instagram_username: str):
+    try:
+        requests.post(
+            f"{API_BASE_URL}/subscription",
+            json={
+                "instagram_username": instagram_username,
+                "is_subscribed": True
+            },
+            timeout=5
+        )
+        logger.info(f"API subscription marked | {instagram_username}")
+    except Exception as e:
+        logger.error(f"API subscription error | {instagram_username} | {e}")
+
+
+# --------------------
+# INSTAGRAM HELPERS
 # --------------------
 def get_user_id(username: str) -> int:
-    user = cl.user_info_by_username(username)
-    return user.pk
+    return cl.user_info_by_username(username).pk
 
 
 BOT_IG_USERNAME = IG_USERNAME
 BOT_USER_ID = None
+
 
 def is_subscribed(user_id: int) -> bool:
     global BOT_USER_ID
@@ -79,8 +113,8 @@ def is_subscribed(user_id: int) -> bool:
             BOT_USER_ID = cl.user_id_from_username(BOT_IG_USERNAME)
 
         followers = cl.user_followers(user_id)
-
         subscribed = BOT_USER_ID in followers
+
         logger.info(
             f"Subscription check | user_id={user_id} | subscribed={subscribed}"
         )
@@ -92,61 +126,61 @@ def is_subscribed(user_id: int) -> bool:
         )
         return False
 
-def process_dm(username: str, text: str):
-    user_id = get_user_id(username)
-    text = text.lower().strip()
-
-    if text == "подписался":
-        if is_subscribed(user_id):
-            link = f"{TG_BOT_LINK}?start=insta_{username}"
-            send_dm(user_id, f"Отлично! Вот твой Трекер 👉 {link}")
-            logger.info(f"Subscribed after confirm | instagram={username}")
-        else:
-            send_dm(
-                user_id,
-                "Подписку пока не вижу 🙏 Попробуй ещё раз через минуту."
-            )
-            logger.warning(
-                f"Confirm failed | still not subscribed | instagram={username}"
-            )
-
 
 def send_dm(user_id: int, text: str):
     cl.direct_send(text, [user_id])
-    logger.info(f"Sent DM | user_id={user_id} | text={text}")
+    logger.info(f"DM sent | user_id={user_id} | text={text}")
 
 
+# --------------------
+# BUSINESS LOGIC
+# --------------------
 def process_comment(username: str):
     user_id = get_user_id(username)
+    logger.info(f"Trigger comment | instagram={username}")
 
-    logger.info(f"Trigger comment | instagram={username} | user_id={user_id}")
+    # 1. создаём пользователя в API
+    api_create_user(username)
 
+    # 2. проверяем подписку
+    if is_subscribed(user_id):
+        api_mark_subscribed(username)
+
+        link = f"{TG_BOT_LINK}?start=insta_{username}"
+        send_dm(user_id, f"✅ Всё готово! Вот твой трекер 👉 {link}")
+
+        logger.info(f"Subscribed immediately | link sent | {username}")
+        return
+
+    # 3. если не подписан — инструкция
     send_dm(
         user_id,
-        "Готовлю трекер на отправку, давай проверим подписку 👇"
+        "Подпишись на аккаунт и напиши сюда «Подписался» 🙌"
     )
+    logger.info(f"Waiting for subscribe | {username}")
+
+
+def process_dm(username: str, text: str):
+    text = text.lower().strip()
+
+    if text != "подписался":
+        return
+
+    user_id = get_user_id(username)
 
     if is_subscribed(user_id):
+        api_mark_subscribed(username)
+
         link = f"{TG_BOT_LINK}?start=insta_{username}"
-        send_dm(user_id, f"Отлично! Вот твой Трекер 👉 {link}")
-        logger.info(f"Subscribed | link sent | instagram={username}")
+        send_dm(user_id, f"✅ Подписка подтверждена! Вот твой трекер 👉 {link}")
+
+        logger.info(f"Subscribed after confirm | {username}")
     else:
         send_dm(
             user_id,
-            "Подпишись на наш аккаунт и напиши сюда «Подписался»"
+            "Подписку пока не вижу 🙏 Попробуй ещё раз через минуту."
         )
-        logger.info(f"Waiting for subscribe | instagram={username}")
-
-    def can_issue_tracker(instagram_username: str) -> bool:
-        # вернуть False, если tracker_issued_at уже есть
-        return True
-
-    if not can_issue_tracker(username):
-        send_dm(
-            user_id,
-            "Трекер уже был выдан 🙂 Если потерял — напиши в поддержку."
-        )
-        return
+        logger.info(f"Confirm failed | still not subscribed | {username}")
 
 
 # --------------------
@@ -164,18 +198,17 @@ def main():
         try:
             comments = cl.media_comments(media_id)
         except ClientConnectionError as e:
-            logger.warning(f"Instagram connection error: {e}")
-            logger.info("Sleeping 2 minutes before retry...")
+            logger.warning(f"Instagram error: {e}")
             time.sleep(120)
             continue
         except Exception as e:
-            logger.exception(f"Unexpected error while fetching comments: {e}")
+            logger.exception(f"Unexpected error: {e}")
             time.sleep(300)
             continue
 
         for comment in comments:
-            text = comment.text.lower()
             username = comment.user.username
+            text = comment.text.lower()
 
             if "трекер" in text and username not in processed_users:
                 process_comment(username)
