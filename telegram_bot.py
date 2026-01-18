@@ -31,7 +31,7 @@ async def cmd_start(message: Message):
 
     if len(parts) > 1 and args[1].startswith("insta_"):
         args = parts[1]
-        instagram_username = args[1].replace("insta_", "")
+        instagram_username = parts[1].replace("insta_", "")
         telegram_user_id = message.from_user.id
 
         await send_to_api(instagram_username, telegram_user_id, message)
