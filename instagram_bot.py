@@ -1,7 +1,6 @@
 import os
 import requests
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import PlainTextResponse
 from dotenv import load_dotenv
 
 from logger import setup_logger
@@ -11,27 +10,20 @@ from logger import setup_logger
 # --------------------
 load_dotenv()
 
-VERIFY_TOKEN = os.getenv("IG_VERIFY_TOKEN", "dev_verify_token")
+VERIFY_TOKEN = os.getenv("IG_VERIFY_TOKEN")
 TG_BOT_LINK = os.getenv("TELEGRAM_BOT_LINK")
 API_BASE_URL = os.getenv("API_BASE_URL")
-IG_PAGE_ACCESS_TOKEN = os.getenv("IG_PAGE_ACCESS_TOKEN")  # может быть None
+IG_PAGE_ACCESS_TOKEN = os.getenv("IG_PAGE_ACCESS_TOKEN")
 
 GRAPH_API_URL = "https://graph.facebook.com/v18.0"
 
-if not all([TG_BOT_LINK, API_BASE_URL]):
-    raise RuntimeError("❌ TG_BOT_LINK или API_BASE_URL не заданы")
-
-INSTAGRAM_ENABLED = IG_PAGE_ACCESS_TOKEN is not None
+if not all([VERIFY_TOKEN, TG_BOT_LINK, API_BASE_URL, IG_PAGE_ACCESS_TOKEN]):
+    raise RuntimeError("❌ Не все переменные окружения заданы")
 
 # --------------------
 # LOGGER
 # --------------------
 logger = setup_logger("instagram_webhook")
-
-if INSTAGRAM_ENABLED:
-    logger.info("🟢 Instagram Graph API ENABLED")
-else:
-    logger.warning("🟡 Instagram Graph API DISABLED (dev mode)")
 
 # --------------------
 # FASTAPI
@@ -65,12 +57,6 @@ def api_mark_subscribed(instagram_username: str):
 # INSTAGRAM GRAPH API
 # --------------------
 def send_dm(instagram_user_id: str, text: str):
-    if not INSTAGRAM_ENABLED:
-        logger.info(
-            f"🧪 [MOCK] DM to {instagram_user_id}: {text}"
-        )
-        return
-
     url = f"{GRAPH_API_URL}/me/messages"
     payload = {
         "recipient": {"id": instagram_user_id},
@@ -96,25 +82,23 @@ def handle_tracker_request(instagram_user_id: str, username: str):
         f"✅ Всё готово!\nВот твой трекер 👉 {link}",
     )
 
-    logger.info(f"🔗 Tracker processed | {username}")
+    logger.info(f"🔗 Tracker sent | {username}")
 
 
 # --------------------
 # WEBHOOK VERIFY (GET)
 # --------------------
 @app.get("/webhook/instagram")
-def verify_webhook(request: Request):
+def verify_webhook(
+    hub_mode: str | None = None,
+    hub_challenge: str | None = None,
+    hub_verify_token: str | None = None,
+):
     logger.info("🔎 Webhook verification request received")
 
-    params = request.query_params
-
-    mode = params.get("hub.mode")
-    challenge = params.get("hub.challenge")
-    verify_token = params.get("hub.verify_token")
-
-    if mode == "subscribe" and verify_token == VERIFY_TOKEN:
+    if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
         logger.info("✅ Webhook verified successfully")
-        return PlainTextResponse(content=challenge, status_code=200)
+        return int(hub_challenge)
 
     logger.warning("❌ Webhook verification failed")
     raise HTTPException(status_code=403, detail="Verification failed")
@@ -152,7 +136,4 @@ async def webhook_receiver(request: Request):
 # --------------------
 @app.get("/")
 def root():
-    return {
-        "status": "instagram webhook server is running",
-        "instagram_enabled": INSTAGRAM_ENABLED,
-    }
+    return {"status": "instagram webhook server is running"}
