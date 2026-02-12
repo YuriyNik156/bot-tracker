@@ -43,6 +43,7 @@ def api_get_user(instagram_username: str):
     except Exception as e:
         logger.error(f"API get_user error | {instagram_username} | {e}")
     return None
+    print("DEBUG: requesting user", instagram_username)
 
 
 async def api_mark_tracker_sent(instagram_username: str, telegram_user_id: int):

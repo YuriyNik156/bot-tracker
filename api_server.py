@@ -166,3 +166,39 @@ def mark_tracker_sent(data: TrackerSent):
 
     finally:
         conn.close()
+
+
+@app.get("/users/{instagram_username}")
+def get_user(instagram_username: str):
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT instagram_username, telegram_user_id, tracker_sent_at
+            FROM users
+            WHERE instagram_username = ?
+            """,
+            (instagram_username,)
+        )
+
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        return {
+            "instagram_username": row[0],
+            "telegram_user_id": row[1],
+            "tracker_sent_at": row[2],
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.error(f"Get user error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    finally:
+        conn.close()
